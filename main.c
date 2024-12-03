@@ -1,37 +1,41 @@
+#define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dirent.h>
 #include <sys/stat.h>
 #include <openssl/evp.h>
+
 #ifdef _WIN32
 #include <windows.h>
+#define S_ISREG(m) (((m) & S_IFMT) == S_IFREG)
+#define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+#else
+#include <dirent.h>
 #endif
 
 #define BUFFER_SIZE 4096
-#define KEY 0xAB  // 简单的加密密钥
-#define PROGRESS_BAR_WIDTH 50
-#define MEGABYTE (1024 * 1024)
-#define SHA256_STRING_LENGTH (EVP_MAX_MD_SIZE * 2 + 1)
-#define HASH_HEADER_MAGIC "ENCRYPTED_FILE_"  // 14 bytes
-#define HASH_FOOTER_MAGIC "_END_OF_HASH"     // 11 bytes
+#define KEY 0xAB  // Simple encryption key
+#define MEGABYTE (1024.0 * 1024.0)
+#define PROGRESS_BAR_WIDTH 20
+#define SHA256_STRING_LENGTH 65  // 64 chars plus null terminator
+#define HASH_HEADER_MAGIC "ENCRYPTED_FILE_"
+#define HASH_FOOTER_MAGIC "_END_OF_HASH"
 
-// 函数声明
+// Function declarations
 void processFile(const char* path, int encrypt);
 void processDirectory(const char* path, int encrypt);
 void encryptDecryptBuffer(unsigned char* buffer, size_t size);
 void displayProgress(const char* filename, size_t current, size_t total);
 void clearLine(void);
 void calculateFileHash(const char* path, char* hash_str);
-void bytesToHexString(const unsigned char* bytes, char* hex_str, int len);
-int writeHashToFile(const char* path, const char* hash);
 int readHashFromFile(const char* path, char* hash);
 int isFileEncrypted(const char* path);
+void bytesToHexString(const unsigned char* bytes, int len, char* hex_str);
 
-// 禁用输出缓冲
+// Disable output buffering
 void disableBuffering() {
 #ifdef _WIN32
-    // Windows平台下设置控制台模式
+    // Set console mode for Windows
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD mode;
     GetConsoleMode(hOut, &mode);
@@ -41,36 +45,36 @@ void disableBuffering() {
 }
 
 int main(int argc, char* argv[]) {
-    // 初始化输出设置
+    // Initialize output settings
     disableBuffering();
 
     if (argc != 3) {
-        printf("使用方法:\n");
-        printf("加密: %s -e <文件或目录路径>\n", argv[0]);
-        printf("解密: %s -d <文件或目录路径>\n", argv[0]);
+        printf("Usage:\n");
+        printf("Encrypt: %s -e <file or directory path>\n", argv[0]);
+        printf("Decrypt: %s -d <file or directory path>\n", argv[0]);
         return 1;
     }
 
     int encrypt = strcmp(argv[1], "-e") == 0;
     if (!encrypt && strcmp(argv[1], "-d") != 0) {
-        printf("错误: 无效的操作参数\n");
+        printf("Error: Invalid operation parameter\n");
         return 1;
     }
 
     struct stat path_stat;
     if (stat(argv[2], &path_stat) != 0) {
-        printf("错误: 无法访问指定的文件或目录\n");
+        printf("Error: Cannot access specified file or directory\n");
         return 1;
     }
 
     if (S_ISREG(path_stat.st_mode)) {
-        // 处理单个文件
+        // Process single file
         processFile(argv[2], encrypt);
     } else if (S_ISDIR(path_stat.st_mode)) {
-        // 处理目录
+        // Process directory
         processDirectory(argv[2], encrypt);
     } else {
-        printf("错误: 不支持的文件类型\n");
+        printf("Error: Unsupported file type\n");
         return 1;
     }
 
@@ -82,51 +86,51 @@ void processFile(const char* path, int encrypt) {
     char stored_hash[SHA256_STRING_LENGTH] = {0};
     int is_encrypted = isFileEncrypted(path);
 
-    // 如果是解密操作，先读取存储的原始哈希值
+    // For decryption, read the stored original hash first
     if (!encrypt) {
         if (!is_encrypted) {
-            printf("错误: 文件未被加密或格式不正确\n");
+            printf("Error: File is not encrypted or format is incorrect\n");
             return;
         }
         if (!readHashFromFile(path, stored_hash)) {
-            printf("错误: 无法读取原始哈希值，文件可能已损坏\n");
+            printf("Error: Cannot read original hash, file may be corrupted\n");
             return;
         }
     } else {
         if (is_encrypted) {
-            printf("错误: 文件已经被加密\n");
+            printf("Error: File is already encrypted\n");
             return;
         }
-        // 计算原始文件的哈希值
+        // Calculate hash of original file
         calculateFileHash(path, original_hash);
     }
 
     FILE* file = fopen(path, "rb");
     if (!file) {
-        printf("错误: 无法打开文件 %s\n", path);
+        printf("Error: Cannot open file %s\n", path);
         return;
     }
 
-    // 获取原始文件大小
+    // Get original file size
     fseek(file, 0, SEEK_END);
-    size_t file_size = ftell(file);
+    size_t file_size = (size_t)ftell(file);
     if (!encrypt) {
-        // 解密时，需要减去哈希头尾的大小
+        // For decryption, subtract hash header and footer size
         file_size -= (strlen(HASH_HEADER_MAGIC) + SHA256_STRING_LENGTH - 1 + strlen(HASH_FOOTER_MAGIC));
     }
     fseek(file, 0, SEEK_SET);
 
-    // 创建临时文件
+    // Create temporary file
     char temp_path[1024];
     snprintf(temp_path, sizeof(temp_path), "%s.tmp", path);
     FILE* temp_file = fopen(temp_path, "wb");
     if (!temp_file) {
-        printf("错误: 无法创建临时文件\n");
+        printf("Error: Cannot create temporary file\n");
         fclose(file);
         return;
     }
 
-    // 如果是加密操作，先写入哈希值
+    // For encryption, write hash first
     if (encrypt) {
         size_t written = 0;
         written += fprintf(temp_file, "%s", HASH_HEADER_MAGIC);
@@ -134,7 +138,7 @@ void processFile(const char* path, int encrypt) {
         written += fprintf(temp_file, "%s", HASH_FOOTER_MAGIC);
 
         if (written != strlen(HASH_HEADER_MAGIC) + SHA256_STRING_LENGTH - 1 + strlen(HASH_FOOTER_MAGIC)) {
-            printf("错误: 写入哈希值失败\n");
+            printf("Error: Failed to write hash\n");
             fclose(file);
             fclose(temp_file);
             remove(temp_path);
@@ -147,10 +151,10 @@ void processFile(const char* path, int encrypt) {
     size_t total_bytes_processed = 0;
 
     if (!encrypt) {
-        // 解密时跳过哈希头
+        // Skip hash header for decryption
         size_t header_offset = strlen(HASH_HEADER_MAGIC) + SHA256_STRING_LENGTH - 1 + strlen(HASH_FOOTER_MAGIC);
-        if (fseek(file, header_offset, SEEK_SET) != 0) {
-            printf("错误: 无法跳过文件头部\n");
+        if (fseek(file, (long)header_offset, SEEK_SET) != 0) {
+            printf("Error: Cannot skip file header\n");
             fclose(file);
             fclose(temp_file);
             remove(temp_path);
@@ -158,14 +162,14 @@ void processFile(const char* path, int encrypt) {
         }
     }
 
-    // 显示初始进度
+    // Show initial progress
     displayProgress(path, 0, file_size);
 
     while ((bytes_read = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
         encryptDecryptBuffer(buffer, bytes_read);
         if (fwrite(buffer, 1, bytes_read, temp_file) != bytes_read) {
-            clearLine();  // 清除进度条
-            printf("错误: 写入文件失败\n");
+            clearLine();
+            printf("Error: Failed to write file\n");
             fclose(file);
             fclose(temp_file);
             remove(temp_path);
@@ -175,120 +179,154 @@ void processFile(const char* path, int encrypt) {
         displayProgress(path, total_bytes_processed, file_size);
     }
 
-    // 确保最终进度为100%
+    // Ensure final progress is 100%
     displayProgress(path, file_size, file_size);
 
     fclose(file);
     fclose(temp_file);
 
-    // 替换原文件
+    // Replace original file
     if (remove(path) != 0) {
         clearLine();
-        printf("错误: 无法删除原文件\n");
+        printf("Error: Cannot delete original file\n");
         remove(temp_path);
         return;
     }
     if (rename(temp_path, path) != 0) {
         clearLine();
-        printf("错误: 无法重命名临时文件\n");
+        printf("Error: Cannot rename temporary file\n");
         return;
     }
 
-    clearLine();  // 清除进度条
+    clearLine();
 
-    // 如果是解密操作，验证文件完整性
+    // For decryption, verify file integrity
     if (!encrypt) {
         char final_hash[SHA256_STRING_LENGTH];
         calculateFileHash(path, final_hash);
-        printf("成功读取原始文件哈希值: %s\n", stored_hash);
-        printf("解密后文件哈希值: %s\n", final_hash);
+        printf("Successfully read original file hash: %s\n", stored_hash);
+        printf("Decrypted file hash: %s\n", final_hash);
         
         if (strcmp(stored_hash, final_hash) == 0) {
-            printf("文件完整性验证: 成功 ✓\n");
+            printf("File integrity verification: Success\n");
         } else {
-            printf("文件完整性验证: 失败 ✗\n");
-            printf("警告: 解密后的文件与原始文件不匹配！\n");
+            printf("File integrity verification: Failed\n");
+            printf("Warning: Decrypted file does not match original!\n");
         }
     } else {
-        printf("原始文件哈希值: %s\n", original_hash);
+        printf("Original file hash: %s\n", original_hash);
     }
 
-    printf("%s 文件%s成功 (总大小: %.2f MB)\n", 
+    printf("%s file %s successfully (Total size: %.2f MB)\n", 
            path, 
-           encrypt ? "加密" : "解密", 
+           encrypt ? "encrypted" : "decrypted", 
            (double)file_size / MEGABYTE);
 }
 
 void processDirectory(const char* path, int encrypt) {
+#ifdef _WIN32
+    WIN32_FIND_DATAA findData;
+    char searchPath[MAX_PATH];
+    char filePath[MAX_PATH];
+    HANDLE hFind;
+
+    // Construct search path
+    snprintf(searchPath, sizeof(searchPath), "%s\\*", path);
+    
+    hFind = FindFirstFileA(searchPath, &findData);
+    if (hFind == INVALID_HANDLE_VALUE) {
+        printf("Error: Cannot open directory %s\n", path);
+        return;
+    }
+
+    do {
+        // Skip . and ..
+        if (strcmp(findData.cFileName, ".") == 0 || strcmp(findData.cFileName, "..") == 0)
+            continue;
+
+        // Construct full file path
+        snprintf(filePath, sizeof(filePath), "%s\\%s", path, findData.cFileName);
+
+        if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            // Recursively process subdirectories
+            processDirectory(filePath, encrypt);
+        } else {
+            // Process file
+            processFile(filePath, encrypt);
+        }
+    } while (FindNextFileA(hFind, &findData));
+
+    FindClose(hFind);
+#else
     DIR* dir = opendir(path);
     if (!dir) {
-        printf("错误: 无法打开目录 %s\n", path);
+        printf("Error: Cannot open directory %s\n", path);
         return;
     }
 
     struct dirent* entry;
-    char full_path[1024];
+    char filePath[1024];
+    struct stat statbuf;
 
     while ((entry = readdir(dir)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
             continue;
-        }
 
-        snprintf(full_path, sizeof(full_path), "%s/%s", path, entry->d_name);
-
-        struct stat path_stat;
-        if (stat(full_path, &path_stat) == 0) {
-            if (S_ISREG(path_stat.st_mode)) {
-                processFile(full_path, encrypt);
-            } else if (S_ISDIR(path_stat.st_mode)) {
-                processDirectory(full_path, encrypt);
+        snprintf(filePath, sizeof(filePath), "%s/%s", path, entry->d_name);
+        
+        if (stat(filePath, &statbuf) == 0) {
+            if (S_ISDIR(statbuf.st_mode)) {
+                processDirectory(filePath, encrypt);
+            } else {
+                processFile(filePath, encrypt);
             }
         }
     }
 
     closedir(dir);
-    printf("目录 %s 处理完成\n", path);
+#endif
+    printf("Directory %s processed\n", path);
 }
 
 void encryptDecryptBuffer(unsigned char* buffer, size_t size) {
     for (size_t i = 0; i < size; i++) {
-        buffer[i] ^= KEY;  // 使用异或运算进行简单的加密/解密
+        buffer[i] ^= KEY;  // Simple encryption/decryption using XOR
     }
 }
 
-// 清除当前行
+// Clear current line
 void clearLine(void) {
-    // 使用ANSI转义序列清除当前行
+    // Use ANSI escape sequence to clear current line
     printf("\033[2K\r");
     fflush(stdout);
 }
 
-// 显示进度条
+// Display progress bar
 void displayProgress(const char* filename, size_t current, size_t total) {
     static size_t last_percent = 0;
     float progress = (float)current / total;
     size_t current_percent = (size_t)(progress * 100);
 
-    // 每1%更新一次显示
+    // Update display every 1%
     if (current_percent == last_percent && current != total) {
         return;
     }
     last_percent = current_percent;
 
     const int bar_width = PROGRESS_BAR_WIDTH;
-    int pos = bar_width * progress;
+    int pos = (int)(bar_width * progress);
 
-    // 使用字符串缓冲区构建输出
+    // Construct output string
     char progress_bar[256] = {0};
     char bar_content[PROGRESS_BAR_WIDTH + 1] = {0};
     
-    // 构建进度条内容
+    // Construct progress bar content
     for (int i = 0; i < bar_width; i++) {
         bar_content[i] = (i < pos) ? '=' : (i == pos ? '>' : ' ');
     }
     bar_content[bar_width] = '\0';
 
-    // 格式化完整的进度信息
+    // Format complete progress information
     snprintf(progress_bar, sizeof(progress_bar), 
              "%s: [%s] %3.1f%% (%5.2f/%5.2f MB)",
              filename,
@@ -297,29 +335,32 @@ void displayProgress(const char* filename, size_t current, size_t total) {
              (double)current / MEGABYTE,
              (double)total / MEGABYTE);
 
-    // 清除当前行并显示进度
+    // Clear current line and display progress
     clearLine();
     printf("%s", progress_bar);
     fflush(stdout);
 }
 
-// 计算文件的SHA-256哈希值
+// Calculate SHA-256 hash of file
 void calculateFileHash(const char* path, char* hash_str) {
     FILE* file = fopen(path, "rb");
     if (!file) {
-        strcpy(hash_str, "无法计算哈希值");
+        strncpy(hash_str, "Cannot calculate hash", SHA256_STRING_LENGTH - 1);
+        hash_str[SHA256_STRING_LENGTH - 1] = '\0';
         return;
     }
 
     EVP_MD_CTX* ctx = EVP_MD_CTX_new();
     if (!ctx) {
-        strcpy(hash_str, "无法初始化哈希上下文");
+        strncpy(hash_str, "Cannot initialize hash context", SHA256_STRING_LENGTH - 1);
+        hash_str[SHA256_STRING_LENGTH - 1] = '\0';
         fclose(file);
         return;
     }
 
     if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) != 1) {
-        strcpy(hash_str, "无法初始化SHA-256");
+        strncpy(hash_str, "Cannot initialize SHA-256", SHA256_STRING_LENGTH - 1);
+        hash_str[SHA256_STRING_LENGTH - 1] = '\0';
         EVP_MD_CTX_free(ctx);
         fclose(file);
         return;
@@ -329,7 +370,8 @@ void calculateFileHash(const char* path, char* hash_str) {
     size_t bytes_read;
     while ((bytes_read = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
         if (EVP_DigestUpdate(ctx, buffer, bytes_read) != 1) {
-            strcpy(hash_str, "计算哈希值时出错");
+            strncpy(hash_str, "Error calculating hash", SHA256_STRING_LENGTH - 1);
+            hash_str[SHA256_STRING_LENGTH - 1] = '\0';
             EVP_MD_CTX_free(ctx);
             fclose(file);
             return;
@@ -339,7 +381,8 @@ void calculateFileHash(const char* path, char* hash_str) {
     unsigned char hash[EVP_MAX_MD_SIZE];
     unsigned int hash_len;
     if (EVP_DigestFinal_ex(ctx, hash, &hash_len) != 1) {
-        strcpy(hash_str, "完成哈希计算时出错");
+        strncpy(hash_str, "Error finalizing hash", SHA256_STRING_LENGTH - 1);
+        hash_str[SHA256_STRING_LENGTH - 1] = '\0';
         EVP_MD_CTX_free(ctx);
         fclose(file);
         return;
@@ -348,22 +391,22 @@ void calculateFileHash(const char* path, char* hash_str) {
     EVP_MD_CTX_free(ctx);
     fclose(file);
     
-    bytesToHexString(hash, hash_str, hash_len);
+    bytesToHexString(hash, hash_len, hash_str);
 }
 
-// 将字节数组转换为十六进制字符串
-void bytesToHexString(const unsigned char* bytes, char* hex_str, int len) {
+// Convert byte array to hexadecimal string
+void bytesToHexString(const unsigned char* bytes, int len, char* hex_str) {
     for (int i = 0; i < len; i++) {
-        sprintf(hex_str + (i * 2), "%02x", bytes[i]);
+        snprintf(hex_str + (i * 2), 3, "%02x", bytes[i]);
     }
     hex_str[len * 2] = '\0';
 }
 
-// 检查文件是否已经被加密
+// Check if file is already encrypted
 int isFileEncrypted(const char* path) {
     FILE* file = fopen(path, "rb");
     if (!file) {
-        printf("错误: 无法打开文件检查加密状态\n");
+        printf("Error: Cannot open file to check encryption status\n");
         return 0;
     }
 
@@ -373,59 +416,59 @@ int isFileEncrypted(const char* path) {
     fclose(file);
 
     if (read_size != header_size) {
-        printf("错误: 文件太小或读取失败\n");
+        printf("Error: File is too small or read failed\n");
         return 0;
     }
 
     return strncmp(header, HASH_HEADER_MAGIC, header_size) == 0;
 }
 
-// 从加密文件中读取原始哈希值
+// Read original hash from encrypted file
 int readHashFromFile(const char* path, char* hash) {
     FILE* file = fopen(path, "rb");
     if (!file) {
-        printf("错误: 无法打开文件进行哈希值读取\n");
+        printf("Error: Cannot open file to read hash\n");
         return 0;
     }
 
-    // 读取并验证头部魔数
+    // Read and verify header magic
     char header[32] = {0};
     size_t header_size = strlen(HASH_HEADER_MAGIC);
     if (fread(header, 1, header_size, file) != header_size) {
-        printf("错误: 无法读取文件头部\n");
+        printf("Error: Cannot read file header\n");
         fclose(file);
         return 0;
     }
 
     if (strncmp(header, HASH_HEADER_MAGIC, header_size) != 0) {
-        printf("错误: 文件头部格式不正确 (预期: %s, 实际: %.*s)\n", 
+        printf("Error: File header format is incorrect (expected: %s, actual: %.*s)\n", 
                HASH_HEADER_MAGIC, (int)header_size, header);
         fclose(file);
         return 0;
     }
 
-    // 读取哈希值
+    // Read hash
     memset(hash, 0, SHA256_STRING_LENGTH);
     char hash_buffer[SHA256_STRING_LENGTH] = {0};
     if (fread(hash_buffer, 1, SHA256_STRING_LENGTH - 1, file) != SHA256_STRING_LENGTH - 1) {
-        printf("错误: 无法读取完整的哈希值\n");
+        printf("Error: Cannot read complete hash\n");
         fclose(file);
         return 0;
     }
     strncpy(hash, hash_buffer, SHA256_STRING_LENGTH - 1);
     hash[SHA256_STRING_LENGTH - 1] = '\0';
 
-    // 读取并验证尾部魔数
+    // Read and verify footer magic
     char footer[32] = {0};
     size_t footer_size = strlen(HASH_FOOTER_MAGIC);
     if (fread(footer, 1, footer_size, file) != footer_size) {
-        printf("错误: 无法读取文件尾部\n");
+        printf("Error: Cannot read file footer\n");
         fclose(file);
         return 0;
     }
 
     if (strncmp(footer, HASH_FOOTER_MAGIC, footer_size) != 0) {
-        printf("错误: 文件尾部格式不正确 (预期: %s, 实际: %.*s)\n", 
+        printf("Error: File footer format is incorrect (expected: %s, actual: %.*s)\n", 
                HASH_FOOTER_MAGIC, (int)footer_size, footer);
         fclose(file);
         return 0;
