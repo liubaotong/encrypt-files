@@ -13,6 +13,39 @@
 
 ## 编译方法
 
+### 使用MSVC编译（Visual Studio）
+
+1. 安装依赖
+   - 安装Visual Studio（推荐使用Visual Studio 2019或更新版本）
+   - 安装OpenSSL开发库
+     - 访问 https://slproweb.com/products/Win32OpenSSL.html
+     - 下载并安装 Win64 OpenSSL v3.0或更新版本
+     - 安装时选择"复制OpenSSL DLL到Windows系统目录"选项
+
+2. 创建项目
+   - 打开Visual Studio
+   - 创建新的空C++项目
+   - 将main.c添加到项目中
+
+3. 配置项目设置
+   - 右键项目 -> 属性
+   - 配置属性 -> C/C++ -> 常规：
+     - 将"SDL检查"设置为"否"
+     - 将"警告等级"设置为"级别3(/W3)"
+   - 配置属性 -> C/C++ -> 预处理器：
+     - 添加预处理器定义：_CRT_SECURE_NO_WARNINGS
+   - 配置属性 -> VC++目录：
+     - 包含目录：添加OpenSSL include目录（通常是 C:\\Program Files\\OpenSSL-Win64\\include）
+     - 库目录：添加OpenSSL lib目录（通常是 C:\\Program Files\\OpenSSL-Win64\\lib）
+   - 配置属性 -> 链接器 -> 输入：
+     - 添加附加依赖项：libssl.lib;libcrypto.lib;
+
+4. 编译
+   - 选择Release x64配置
+   - 构建 -> 生成解决方案
+
+### 使用GCC编译（MinGW）
+
 使用gcc编译器编译（需要OpenSSL库）：
 
 ```bash
@@ -87,4 +120,3 @@ test.txt: [====================] 100.0% (1.50/1.50 MB)
 test.txt 文件解密成功 (总大小: 1.50 MB)
 处理后文件哈希值: 7a8b...
 文件完整性验证: 成功 ✓
-```
